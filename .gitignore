@@ -1,0 +1,43 @@
+# Secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+credentials.json
+
+# n8n local data
+.n8n/
+n8n_data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python (in case you add scripts later)
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+
+# Node (if you add any tooling)
+node_modules/
+npm-debug.log*
+
+# Logs
+*.log
+logs/
+
+# Local data dumps / experiments
+*.db
+*.sqlite
+data/local/
+scratch/
