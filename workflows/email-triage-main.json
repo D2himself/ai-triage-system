@@ -1,0 +1,405 @@
+[
+  {
+    "updatedAt": "2026-09-18T16:23:26.000Z",
+    "createdAt": "2026-03-19T13:36:23.145Z",
+    "id": "YvYWLjqlEa4uxEUp",
+    "name": "My workflow",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "email-triage",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "902af1ba-cea1-47ff-8b5a-e0338e2ad9b7",
+        "name": "Webhook",
+        "webhookId": "2487250a-e0e3-45e2-91bc-6896a60ce8cc"
+      },
+      {
+        "parameters": {
+          "jsCode": "// The webhook data is nested in body\nconst webhookData = $input.all()[0].json.body;\n\n// Generate unique request ID\nconst requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\n\n// Simple hash function (since crypto is blocked) (fingerprint)\nfunction simpleHash(str) {\n  let hash = 0;\n  for (let i = 0; i < str.length; i++) {\n    const char = str.charCodeAt(i);\n    hash = ((hash << 5) - hash) + char;\n    hash = hash & hash; // Convert to 32bit integer\n  }\n  return Math.abs(hash).toString(16).padStart(16, '0');\n}\n\n// Calculate email hash for duplicate detection\nconst hashInput = `${webhookData.from}|${webhookData.subject}|${webhookData.body}`;\nconst emailHash = simpleHash(hashInput);\n\nreturn [{\n  json: {\n    request_id: requestId,\n    email_hash: emailHash,\n    from: webhookData.from,\n    subject: webhookData.subject,\n    body: webhookData.body,\n    customer_id: webhookData.customer_id || null,\n    timestamp_started: new Date().toISOString()\n  }\n}];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          208,
+          0
+        ],
+        "id": "1a6b4c7c-3cc7-4407-a934-424175e65432",
+        "name": "Generate Request Metadata"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO requests (\n    request_id,\n    email_hash,\n    from_email,\n    subject,\n    body,\n    customer_id,\n    status,\n    created_at\n) VALUES (\n    $1, $2, $3, $4, $5, $6, 'processing', NOW()\n)\nRETURNING request_id, created_at",
+          "options": {
+            "queryReplacement": "={{ [ $('Generate Request Metadata').item.json.request_id, $('Generate Request Metadata').item.json.email_hash, $('Generate Request Metadata').item.json.from, $('Generate Request Metadata').item.json.subject, $('Generate Request Metadata').item.json.body, $('Generate Request Metadata').item.json.customer_id ] }}"
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          880,
+          0
+        ],
+        "id": "9b5b3a21-582d-4f50-933c-121ed842a880",
+        "name": "Insert Request",
+        "credentials": {
+          "postgres": {
+            "id": "T6CoVMN2YCTaZ0eJ",
+            "name": "Postgres account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={\n  \"status\": \"success\",\n  \"request_id\": \"{{ $('Insert Request').item.json.request_id }}\",\n  \"message\": \"Email classified successfully\"\n}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.5,
+        "position": [
+          2208,
+          0
+        ],
+        "id": "311111bb-b469-48cd-8137-1246683c5f11",
+        "name": "Respond to Webhook"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT f.is_duplicate, f.existing_request_id, f.existing_status,\n       d.decision, d.destination, d.escalation_reason\nFROM check_duplicate_request($1) f\nLEFT JOIN routing_decisions d ON d.request_id = f.existing_request_id\nORDER BY d.id DESC NULLS LAST\nLIMIT 1",
+          "options": {
+            "queryReplacement": "={{ [ $('Generate Request Metadata').item.json.email_hash ] }}"
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          432,
+          0
+        ],
+        "id": "3a2de107-8dc9-493a-bb0c-5e4c5db38713",
+        "name": "Check Duplicate",
+        "credentials": {
+          "postgres": {
+            "id": "T6CoVMN2YCTaZ0eJ",
+            "name": "Postgres account"
+          }
+        },
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "19edd1e3-b4ad-42bf-8b5a-9da85ae682cd",
+                "leftValue": "={{ $json.is_duplicate }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          656,
+          0
+        ],
+        "id": "c97a87e4-f39e-4f17-b802-3adb950d1628",
+        "name": "Is Duplicate?"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Get the email data from the \"Generate Request Metadata\" node\nconst input = $('Generate Request Metadata').item.json;\n\nconst prompt = `You are a customer support email triage classifier.\n\nYour task: Analyze the email below and return ONLY a valid JSON object. Do not include any explanation, markdown, or additional text.\n\nCATEGORIES:\n- billing_issue: Payment problems, subscription issues, invoice disputes, charge errors\n- technical_issue: Product bugs, login problems, feature malfunctions, performance issues\n- refund_request: Money back requests, cancellation refunds, dissatisfaction-based returns\n- legal_escalation: Legal threats, compliance concerns, data privacy requests, GDPR/CCPA\n- unknown: Ambiguous, off-topic, or insufficient information to classify\n\nRISK FLAGS (include if detected):\n- refund: Customer explicitly requests money back\n- chargeback: Mentions credit card dispute or bank involvement\n- lawsuit: Legal action threatened or mentioned\n- compliance: GDPR, CCPA, data breach, regulatory concern\n- fraud: Suspected fraudulent activity\n- outage: Service completely unavailable\n- data_loss: Customer reports lost data\n\nEMAIL CONTENT:\nSubject: ${input.subject}\nFrom: ${input.from}\nBody: ${input.body}\n\nOUTPUT FORMAT (JSON only):\n{\n  \"intent\": \"<one of the 5 categories>\",\n  \"confidence\": <float between 0.0 and 1.0>,\n  \"summary\": \"<one sentence under 100 characters>\",\n  \"risk_flags\": [\"<flag1>\", \"<flag2>\"] or [],\n  \"reasoning\": \"<brief explanation of classification>\"\n}\n\nRULES:\n1. confidence must be 0.0-1.0 (use 0.3-0.5 for ambiguous cases)\n2. If email is unclear or off-topic, use intent=\"unknown\" with confidence < 0.5\n3. Multiple risk flags are allowed\n4. summary must capture the core issue in under 100 chars\n5. reasoning helps humans understand your decision (1-2 sentences)\n\nReturn ONLY the JSON object. No markdown, no code blocks, no extra text.`;\n\nreturn [{\n  json: {\n    request_id: input.request_id,\n    classification_prompt: prompt,\n    timestamp_prompt_built: new Date().toISOString()\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1088,
+          0
+        ],
+        "id": "74a01036-53db-43f2-bd1e-df47ef0235aa",
+        "name": "Build Classification Prompt"
+      },
+      {
+        "parameters": {
+          "jsCode": "// === POLICY ENGINE ===\n// Reads classification output, applies deterministic rules,\n// output a routing decision.\n\n// 1. Pull data from upstream nodes\nconst rawOutput = $(\"Basic LLM Chain\").item.json;\nconst metadata = $('Generate Request Metadata').item.json;\n\n// 2. Configuration (would normally live in env/config)\nconst CONFIDENCE_THRESHOLDS = {\n  billing_issue: 0.75,\n  technical_issue: 0.70,\n  refund_request: 0.80,\n  legal_escalation: 0.90,\n  unknown: 1.01 // impossible threshold = always escalate\n};\n\nconst CRITICAL_RISK_FLAGS = ['lawsuit', 'compliance', 'fraud'];\nconst VALID_RISK_FLAGS = ['refund', 'chargeback', 'lawsuit', 'compliance', 'fraud', 'outage', 'data_loss'];\n\nconst ROUTING_QUEUES = {\n  billing_issue: 'billing_team_queue',\n  technical_issue: 'support_tier1_queue',\n  refund_request: 'billing_team_queue',\n  legal_escalation: 'legal_team_queue',\n  unknown: 'human_review_queue'\n};\n\nconst COST_LIMIT_USD = 0.10;\nconst LATENCY_LIMIT_MS = 15000;\n\n// 3. Stud cost/latency for now (we'll wire real values in Phase 6)\nconst cost_usd = 0.001;\nconst latency_ms = 2000;\n\n// 4. Initialize tracking\nconst policiesEvaluated = [];\nconst policiesPassed = [];\nconst policiesFailed = [];\n\n// 5.  Policy checks (we'll fill these in)\n\n// CHECK 0: LLM output validation\n// Groq does not enforce the JSON schema the way OpenAI's structured outputs did,\n// so the contract is checked here. Bad output escalates instead of crashing.\npoliciesEvaluated.push('output_validation_check');\n\nconst validationErrors = [];\nlet classification = null;\ntry {\n  classification = JSON.parse(rawOutput?.text ?? '');\n} catch (e) {}\n\nconst c = classification;\nif (c === null || typeof c !== 'object' || Array.isArray(c)) {\n  validationErrors.push('output is not a JSON object');\n} else {\n  if (!Object.hasOwn(CONFIDENCE_THRESHOLDS, c.intent)) validationErrors.push(`unknown intent: ${c.intent}`);\n  if (typeof c.confidence !== 'number' || c.confidence < 0 || c.confidence > 1) validationErrors.push(`confidence is not a number from 0 to 1: ${c.confidence}`);\n  if (typeof c.summary !== 'string' || c.summary.length > 500) validationErrors.push('summary is missing or longer than 500 characters');\n  if (typeof c.reasoning !== 'string') validationErrors.push('reasoning is missing');\n  if (!Array.isArray(c.risk_flags)) {\n    validationErrors.push('risk_flags is not a list');\n  } else {\n    const unknownFlags = c.risk_flags.filter(flag => !VALID_RISK_FLAGS.includes(flag));\n    if (unknownFlags.length > 0) validationErrors.push(`unknown risk flags: ${unknownFlags.join(', ')}`);\n  }\n}\n\nif (validationErrors.length > 0) {\n  policiesFailed.push('output_validation_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'invalid_llm_output',\n      escalation_priority: 'high',\n      validation_errors: validationErrors,\n      raw_output: rawOutput?.text ?? null,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      // Safe placeholder so the database writes still have valid values\n      classification: {\n        intent: 'unknown',\n        confidence: 0,\n        summary: '',\n        risk_flags: [],\n        reasoning: 'LLM output failed validation: ' + validationErrors.join('; ')\n      },\n      validation_success: false,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('output_validation_check');\n}\n\n// CHECK 1: Critical risk flags\n// TODO\npoliciesEvaluated.push('risk_flag_check');\n\nconst found = classification.risk_flags.filter(flag => CRITICAL_RISK_FLAGS.includes(flag));\n\nif (found.length > 0) {\n  policiesFailed.push('risk_flag_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'critical_risk_flag',\n      escalation_priority: 'critical',\n      triggered_flags: found,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      classification: classification,\n    validation_success: true,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('risk_flag_check');\n}\n\n// CHECK 2: Budget\n// TODO\npoliciesEvaluated.push('budget_check');\n\nif (cost_usd > COST_LIMIT_USD || latency_ms > LATENCY_LIMIT_MS) {\n  policiesFailed.push('budget_check');\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'budget_exceeded',\n    escalation_priority: 'high',\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true\n  }\n}];\n} else {\n  policiesPassed.push('budget_check');\n}\n\n// CHECK 3: Confidence\n// TODO\npoliciesEvaluated.push('confidence_check');\n\nconst threshold = CONFIDENCE_THRESHOLDS[classification.intent];\nif (threshold === undefined) {\n  throw new Error(`No threshold defined for intent: ${classification.intent}`);\n}\nif (classification.confidence < threshold) {\n  policiesFailed.push('confidence_check');\n  const escalation_priority = classification.intent === 'legal_escalation' ? 'critical' : 'medium';\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'low_confidence',\n    escalation_priority: escalation_priority,\n    confidence_threshold: threshold,\n    actual_confidence: classification.confidence,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n} else {\n  policiesPassed.push('confidence_check');\n}\n\n// 6. Default: auto-route\nreturn [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'auto_route',\n    destination: ROUTING_QUEUES[classification.intent],\n    escalation_reason: null,\n    escalation_priority: null,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1584,
+          0
+        ],
+        "id": "ece3398e-a969-491f-98a1-a9f3342fcd30",
+        "name": "Policy Engine"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO classifications (\n  request_id, intent, confidence, summary, risk_flags, reasoning,\n  model_used, fallback_triggered, latency_ms, cost_usd, validation_success,\n  validation_errors, raw_response\n) VALUES (\n  $1, $2, $3, $4, to_jsonb($5::text[]), $6, $7, $8, $9, $10, $11,\n  to_jsonb($12::text[]), $13\n)",
+          "options": {
+            "queryReplacement": "={{ [   $('Policy Engine').item.json.request_id,   $('Policy Engine').item.json.classification.intent,   $('Policy Engine').item.json.classification.confidence,   $('Policy Engine').item.json.classification.summary,   $('Policy Engine').item.json.classification.risk_flags,   $('Policy Engine').item.json.classification.reasoning,   'openai/gpt-oss-20b',   false,   $('Policy Engine').item.json.latency_ms,   $('Policy Engine').item.json.cost_usd,   $('Policy Engine').item.json.validation_success,   $('Policy Engine').item.json.validation_errors ?? [],   $('Basic LLM Chain').item.json.text ?? null ] }}"
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          1792,
+          0
+        ],
+        "id": "5d3a3bcf-cb07-4041-acd8-d1b59d440061",
+        "name": "Write Classification",
+        "credentials": {
+          "postgres": {
+            "id": "T6CoVMN2YCTaZ0eJ",
+            "name": "Postgres account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO routing_decisions (\n  request_id, decision, destination, escalation_reason, escalation_priority,\n  policies_evaluated, policies_passed, policies_failed\n) VALUES (\n  $1, $2, $3, $4, $5, to_jsonb($6::text[]), to_jsonb($7::text[]), to_jsonb($8::text[])\n)",
+          "options": {
+            "queryReplacement": "={{ [   $('Policy Engine').item.json.request_id,   $('Policy Engine').item.json.decision,   $('Policy Engine').item.json.destination,   $('Policy Engine').item.json.escalation_reason,   $('Policy Engine').item.json.escalation_priority,   $('Policy Engine').item.json.policies_evaluated,\n$('Policy Engine').item.json.policies_passed,\n$('Policy Engine').item.json.policies_failed ] }}"
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          1984,
+          0
+        ],
+        "id": "cb14994b-7c44-4b36-9afd-e620c285f0cd",
+        "name": "Write Routing Decision",
+        "credentials": {
+          "postgres": {
+            "id": "T6CoVMN2YCTaZ0eJ",
+            "name": "Postgres account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "={{ $json.classification_prompt }}",
+          "batching": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.9,
+        "position": [
+          1296,
+          0
+        ],
+        "id": "fe7b3b89-37ad-4682-b7c8-c6fb4f3aac1b",
+        "name": "Basic LLM Chain"
+      },
+      {
+        "parameters": {
+          "model": "openai/gpt-oss-20b",
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+        "typeVersion": 1,
+        "position": [
+          1264,
+          192
+        ],
+        "id": "c8efb78b-07f0-4fc8-9f0c-bb8fb02443f6",
+        "name": "Groq Chat Model",
+        "credentials": {
+          "groqApi": {
+            "id": "8yNtqF6XRYKBbpru",
+            "name": "Groq account"
+          }
+        }
+      },
+      {
+        "id": "1e53b548-6a69-4a12-82a8-b7f755fb7a93",
+        "name": "Respond Duplicate",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.5,
+        "position": [
+          880,
+          -208
+        ],
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify({ status: 'duplicate', request_id: $json.existing_request_id, decision: $json.decision, destination: $json.destination, escalation_reason: $json.escalation_reason, message: 'This email was already processed. Returning the saved result.' }) }}",
+          "options": {}
+        }
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Generate Request Metadata",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Request Metadata": {
+        "main": [
+          [
+            {
+              "node": "Check Duplicate",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Insert Request": {
+        "main": [
+          [
+            {
+              "node": "Build Classification Prompt",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Duplicate": {
+        "main": [
+          [
+            {
+              "node": "Is Duplicate?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Duplicate?": {
+        "main": [
+          [
+            {
+              "node": "Respond Duplicate",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Insert Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Classification Prompt": {
+        "main": [
+          [
+            {
+              "node": "Basic LLM Chain",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Policy Engine": {
+        "main": [
+          [
+            {
+              "node": "Write Classification",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Classification": {
+        "main": [
+          [
+            {
+              "node": "Write Routing Decision",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Routing Decision": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Groq Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Basic LLM Chain",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Basic LLM Chain": {
+        "main": [
+          [
+            {
+              "node": "Policy Engine",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "binaryMode": "separate"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {},
+    "versionId": "e9937b36-0d43-4538-bea1-bd01a0843ba3",
+    "activeVersionId": "e9937b36-0d43-4538-bea1-bd01a0843ba3",
+    "versionCounter": 757,
+    "triggerCount": 1,
+    "tags": []
+  }
+]
