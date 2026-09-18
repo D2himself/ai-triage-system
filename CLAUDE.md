@@ -1,61 +1,34 @@
-# Failure-Aware Triage (ai-triage-system) — Project Context
+# Failure-Aware Triage (ai-triage-system): Agent Context
 
 *Read this before doing any work in this repo.*
 
----
-
-## Goal
-
-A hybrid triage system that routes tasks through either an LLM path or a
-deterministic rules/policy path. Orchestrated with n8n. "Failure-aware" means
-the system handles LLM path failures or low-confidence outputs by falling back
-to deterministic logic.
+This file does not keep its own record of goals, status, or next steps. It points to the
+files that do, so there is only one place to update.
 
 ---
 
-## Stack
+## Where to find things
 
-- LLM path: OpenAI + Groq
-- Orchestration: n8n
-- Rules layer: TBD
-- Package management: uv
+| You need | Read |
+|---|---|
+| The goal, the design, the phases, and which success criteria are met | `plan.md` |
+| The next step, what is completed, and the open issues | `session-log.md`, sections 1 to 4 |
+| Why past choices were made | `session-log.md`, section 5 (Decisions) |
+| What happened in each session | `session-log.md`, section 6 (Session history) |
+| Commands to start n8n, run test emails, and query Supabase | `session-log.md`, section 7 (Reference) |
 
----
-
-## Current State
-
-| Component | Status |
-|-----------|--------|
-| LLM path | ✅ Complete |
-| Policy / rules layer | ❌ Not yet implemented (design TBD) |
-| n8n nodes (partial) | 🔄 In progress — remaining nodes to complete |
-| End-to-end integration | Not started |
+Start every session by reading sections 1 to 4 of `session-log.md`.
 
 ---
 
-## Blocker
+## Rules for agents
 
-None. Clear path forward.
-
----
-
-## Immediate Next Steps
-
-1. Design and implement the policy/rules layer
-2. Complete remaining n8n nodes
-3. Wire end-to-end and test
-
----
-
-## Key Files
-
-[Update as project develops — no code exists yet, this is a placeholder]
-
----
-
-## Context for Agents
-
-- This is Kemi's secondary project — unblocked, but lower priority than Hop-Specialist.
-- LLM path is done. Don't touch it unless debugging.
-- Rules layer design is open — propose options and let Kemi decide before implementing.
-- Check `~/life-os/context/active-projects.md` for latest state before starting work.
+- **Intent: Leverage.** Implementer mode is allowed on this project.
+- This is Kemi's secondary project. It is lower priority than Hop-Specialist.
+- Propose any change to the policy rules and let Kemi decide before you build it.
+- For code node edits, export the workflow JSON with the n8n command line tool, edit the file,
+  and import it again. The browser code editor has dropped edits before. After an import, run
+  `n8n publish:workflow` and restart the container, because the import turns the workflow off.
+- At the end of a session, update `session-log.md`. Update `plan.md` only when the goal,
+  the design, or a phase status changes. Do not add status to this file.
+- The life-os record for this project is `~/life-os/context/projects/ai-triage-system.md`.

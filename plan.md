@@ -1,97 +1,164 @@
-# AI Triage System — Project Plan
+# AI Triage System: Project Plan
 
-## Project Identity
+This file holds the goal and the design. It changes rarely. For the next step and the
+history of each session, read `session-log.md`.
 
-**Name**: Failure-Aware AI Triage System for Real-World Operations
-
-**One-Line Description**: A hybrid AI–deterministic system that triages customer support emails using probabilistic reasoning, explicit control policies, persistent state, and safety guardrails — with full traceability and failure handling.
-
-**Why This Matters**: Most "AI agent" demos ignore failure. This system is designed around uncertainty, demonstrating research-grade thinking about control, safety, and inspectable reasoning.
+**Last updated:** 2026-09-18
 
 ---
 
-## System Architecture
+## Goal
 
-### Core Pattern: Trigger → State → Reason → Decide → Act
+Build a system that sorts customer support emails. An LLM reads each email and suggests a
+category, a confidence score, and any risk flags. A set of fixed rules then decides what
+happens next. The email either goes to the right team queue automatically, or it goes to a
+person for review. Every step is saved to a database, so you can look back and see why each
+decision was made.
+
+The system is built to handle failure on purpose. When the LLM is unsure, when an email
+carries a serious risk, or when a request costs too much, the system hands the email to a
+person instead of guessing.
+
+**Why it is worth building:** most AI agent demos only show the case where everything works.
+This project shows how a system should behave when the model is wrong, slow, or unavailable.
+
+**What "done" looks like:**
+- A public GitHub repo with the n8n workflow, the database schema, and test cases.
+- A short demo video that shows one email routed automatically and one escalated.
+- A blog post titled "Building AI Systems That Know When Not to Act".
+
+---
+
+## Status at a glance
+
+| Phase | What it covers | Status |
+|---|---|---|
+| 0 | Scope: problem, requirements, success criteria | Done |
+| 1 | System design: architecture, data schema | Done |
+| 2 | Reasoning layer: prompt, JSON output | Done |
+| 3 | Policy layer: the fixed decision rules | Done |
+| 4 | State: database tables | Done |
+| 5 | Build the n8n workflow | **In progress.** 13 of about 32 nodes built |
+| 6 | Metrics and monitoring | Not started |
+| 7 | Failure testing | Not started |
+| 8 | Deployment | Not started |
+| 9 | Documentation | Not started |
+| 10 | Portfolio: repo, blog post, demo video | Not started |
+
+### Success criteria
+
+- [x] The system takes in unstructured email text.
+- [x] The LLM returns an intent and a confidence score.
+- [x] The LLM sorts emails into 5 categories and adds risk flags.
+- [x] The Policy Engine decides auto route or escalate from confidence and risk flags.
+- [x] The request, the classification, and the routing decision are saved to the database.
+- [x] A repeated email returns the saved result instead of running again.
+- [ ] Emails are sent to a real queue or a person. Today the decision is only stored.
+- [ ] Cost and latency checks use real numbers. Today they use fixed placeholder values.
+- [ ] A full trace of each request is saved to the `traces` table.
+- [ ] Escalated emails reach a person, e.g., through a Slack alert.
+- [x] Bad LLM output escalates instead of crashing the workflow.
+- [ ] An LLM that is down or times out is handled without crashing the workflow.
+- [ ] A second model takes over when the main model fails.
+
+### Horizons
+
+**H1: working prototype.**
+- [x] Database, n8n setup, and the first 6 nodes.
+- [x] Policy Engine and database writes for classifications and routing decisions.
+- [x] Duplicate check, and the workflow and schema saved in the repo.
+- [ ] Trace logging.
+- [ ] Demo video that shows one auto route and one escalation.
+
+**H2: full system.**
+- [ ] All 5 categories tested, with the failure modes below shown working.
+- [ ] Failure test suite, circuit breaker, and duplicate handling.
+- [ ] Metrics queries and alerts.
+- [ ] Connection to a real inbox such as Gmail.
+- [ ] GitHub repo with a technical README.
+
+**H3: public artifacts.**
+- [ ] Blog post with architecture diagrams and example traces.
+- [ ] LinkedIn posts and a resume update.
+
+---
+
+## Design
+
+### How a request flows
 
 ```
-Email Input → Generate Metadata → Store Request → 
-Build Prompt → LLM Classification → Policy Decision → 
-Route/Escalate → Store Results → Trace Logging → Response
+Email in (webhook) → Generate Metadata → Check Duplicate → (repeat: return saved result)
+→ Store Request → Build Prompt →
+LLM Classification → Policy Engine → Store Classification →
+Store Routing Decision → (Trace Logging, not built) → Response
 ```
 
-### Key Design Principles
+### Design principles
 
-1. **Reasoning ≠ Control**: LLM proposes classifications; deterministic policy decides actions
-2. **Probabilistic + Symbolic**: Neural models for understanding + hard rules for safety
-3. **Inspectability**: Every decision has a trace; every failure has a log
-4. **Safety First**: Low confidence → escalate; Risk flags → human review; Budget exceeded → halt
-5. **Failure as Feature**: System explicitly handles and demonstrates failure modes
+1. **The LLM suggests, the rules decide.** The model proposes a category. Fixed code decides
+   the action.
+2. **Neural plus fixed rules.** The model handles reading the email. Hard rules handle safety.
+3. **Every decision can be inspected.** Each decision has a trace, and each failure has a log
+   entry.
+4. **Safety first.** Low confidence leads to escalation. A serious risk flag leads to human
+   review. An exceeded budget stops automation.
+5. **Failure is shown, not hidden.** The system handles each failure mode on purpose and the
+   project demonstrates it.
 
----
+### Stack
 
-## Technical Stack
+| Part | Tool | Notes |
+|---|---|---|
+| Orchestration | n8n in Docker | Runs at http://localhost:5678 |
+| Database | Supabase (Postgres) | Connection pooler on port 6543 |
+| Main LLM | Groq, `openai/gpt-oss-20b` | Since Session 4. OpenAI GPT-4o-mini was the original choice, and the OpenAI account has no credits left |
+| Fallback LLM | None yet | See pending decision B in `session-log.md` |
+| Alerts | Slack | Planned, not built |
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Orchestration | n8n (Docker) | Workflow execution and visual debugging |
-| Database | Supabase (Postgres) | State persistence, audit logs, metrics |
-| Primary LLM | OpenAI GPT-4o-mini | Email classification with structured outputs |
-| Fallback LLM | OpenAI GPT-3.5-turbo | Backup if primary fails |
-| Integration | Slack / Email / Webhook | Action execution (routing, escalations) |
-| Monitoring | Built-in (Postgres queries) | Real-time metrics and system health |
+### Data model
 
----
+**requests** holds each incoming email and its status.
+- `request_id` (primary key), `email_hash` (unique), `from_email`, `subject`, `body`, `status`.
+- The unique hash is how duplicate emails are detected.
 
-## Data Model
+**classifications** holds what the LLM returned and how it performed.
+- `intent`, `confidence`, `summary`, `risk_flags`, `reasoning`.
+- `model_used`, `latency_ms`, `cost_usd`, `validation_success`.
 
-### Core Tables
+**routing_decisions** holds what the Policy Engine decided and why.
+- `decision` (auto_route or escalate), `destination`, `escalation_reason`,
+  `escalation_priority`.
+- `policies_evaluated`, `policies_passed`, `policies_failed`.
 
-**requests**: Incoming email data + status tracking
-- `request_id` (PK), `email_hash` (unique), `from_email`, `subject`, `body`, `status`
-- Enables duplicate detection, request tracking, audit trail
+**traces** holds the full record of one request, for debugging. Not written to yet.
+- `trace_id`, `steps` (jsonb), `total_latency_ms`, `total_cost_usd`, `success`.
 
-**classifications**: LLM reasoning outputs + performance metrics
-- `intent`, `confidence`, `summary`, `risk_flags`, `reasoning`
-- `model_used`, `latency_ms`, `cost_usd`, `validation_success`
-- Tracks what the AI thought and how well it performed
+**failure_log** holds each failure. The circuit breaker will read from it. Not written to yet.
+- `failure_type`, `component`, `model_used`, `cost_impact_usd`.
 
-**routing_decisions**: Policy engine outputs
-- `decision` (auto_route | escalate), `destination`, `escalation_reason`, `escalation_priority`
-- `policies_evaluated`, `policies_passed`, `policies_failed`
-- Records why each routing decision was made
+A sixth table, `metrics_cache`, also exists in Supabase. The full schema, with every column,
+constraint, index, and function, is in `database/schema.sql`.
 
-**traces**: Full execution traces for debugging
-- `trace_id`, `steps` (JSONB), `total_latency_ms`, `total_cost_usd`, `success`
-- Enables post-mortem analysis and system optimization
+### Categories
 
-**failure_log**: Dedicated failure tracking
-- `failure_type`, `component`, `model_used`, `cost_impact_usd`
-- Powers circuit breaker and system reliability monitoring
+1. `billing_issue`: payment problems, subscription issues, invoice disputes.
+2. `technical_issue`: product bugs, login problems, broken features.
+3. `refund_request`: requests for money back, refunds after cancelling.
+4. `legal_escalation`: legal threats, compliance concerns, GDPR or CCPA requests.
+5. `unknown`: unclear, off topic, or not enough information.
 
----
+### Risk flags
 
-## Classification System
+- `refund`: the customer asks for money back.
+- `chargeback`: a card dispute or the bank is involved.
+- `lawsuit`: the customer threatens legal action.
+- `compliance`: GDPR, CCPA, a data breach, or another legal rule.
+- `fraud`: suspected fraud.
+- `outage`: the service is fully down.
+- `data_loss`: the customer reports lost data.
 
-### Categories (5)
-
-1. **billing_issue**: Payment problems, subscription issues, invoice disputes
-2. **technical_issue**: Product bugs, login problems, feature malfunctions
-3. **refund_request**: Money back requests, cancellation refunds
-4. **legal_escalation**: Legal threats, compliance concerns, GDPR/CCPA requests
-5. **unknown**: Ambiguous, off-topic, insufficient information
-
-### Risk Flags (7)
-
-- `refund`: Customer explicitly requests money back
-- `chargeback`: Credit card dispute or bank involvement
-- `lawsuit`: Legal action threatened
-- `compliance`: GDPR, CCPA, data breach, regulatory concern
-- `fraud`: Suspected fraudulent activity
-- `outage`: Service completely unavailable
-- `data_loss`: Customer reports lost data
-
-### Structured Output (JSON Schema)
+### LLM output
 
 ```json
 {
@@ -103,231 +170,120 @@ Route/Escalate → Store Results → Trace Logging → Response
 }
 ```
 
----
+On the Groq path, the node returns this JSON as a text string, and nothing on the Groq side
+enforces the format. OpenAI did enforce it, through structured outputs. So the Policy Engine
+parses the text and checks every field itself before any rule runs. See check 0 below.
 
-## Policy Engine
+### Policy Engine
 
-### Decision Rules (Deterministic)
+The rules run in this order. The first rule that fails stops the check and escalates the
+email. The cheapest and most safety critical checks run first.
 
-**Rule 1: Confidence Threshold**
-- Each intent has minimum confidence requirement
-- Below threshold → escalate to human review
-- Thresholds: billing (0.75), technical (0.70), refund (0.80), legal (0.90)
+**Check 0: output shape.** Built in Session 5.
+- The output must be a JSON object.
+- `intent` must be one of the 5 categories.
+- `confidence` must be a number from 0 to 1.
+- `summary` and `reasoning` must be text.
+- `risk_flags` must be a list, and every flag must be one of the 7 known flags.
+- Any failure escalates with `invalid_llm_output` and priority high, and sets
+  `validation_success` to false.
 
-**Rule 2: Risk Flag Check**
-- Auto-escalate flags: lawsuit, compliance, fraud
-- Warning flags: refund, chargeback
-- Monitor flags: outage, data_loss
+**Rule 1: critical risk flags.** Built.
+- `lawsuit`, `compliance`, or `fraud` forces escalation, whatever the confidence.
+- `refund` and `chargeback` are warnings only. `outage` and `data_loss` are for monitoring.
 
-**Rule 3: Budget Enforcement**
-- Cost per request > $0.10 → escalate + log warning
-- Latency > 15 seconds → escalate + switch model
-- Daily budget exceeded → halt automation
+**Rule 2: budget.** Built, but it reads placeholder values.
+- Cost above $0.10 per request leads to escalation and a warning.
+- Latency above 15 seconds leads to escalation and a model switch.
+- An exceeded daily budget stops automation. Not built.
+- Cost and latency are fixed at $0.001 and 2000 ms for now, so this rule never fires.
 
-**Rule 4: Circuit Breaker**
-- 3+ failures in 60 minutes → disable automation
-- Cooldown period: 30 minutes
-- Requires manual investigation
+**Rule 3: confidence threshold.** Built.
+- Each intent has a minimum confidence. Below it, the email escalates.
+- Thresholds: billing 0.75, technical 0.70, refund 0.80, legal 0.90.
+- `unknown` has a threshold of 1.01 on purpose, so it always escalates.
 
-### Routing Queues
+**Rule 4: circuit breaker.** Not built.
+- 3 or more failures in 60 minutes turn off automation.
+- Automation stays off for a 30 minute cooldown and needs a manual check.
 
-| Intent | Queue | Priority | SLA |
-|--------|-------|----------|-----|
+### Routing queues
+
+| Intent | Queue | Priority | Response time target |
+|---|---|---|---|
 | billing_issue | billing_team_queue | Medium | 24h |
 | technical_issue | support_tier1_queue | High | 4h |
 | refund_request | billing_team_queue | Medium | 48h |
 | legal_escalation | legal_team_queue | Critical | 2h |
 | unknown | human_review_queue | Low | 72h |
 
----
+### Failure modes the project will show
 
-## Failure Modes (Explicitly Demonstrated)
-
-### 1. Malformed LLM Output
-**Trigger**: Invalid JSON from model
-**Handling**: Retry with fallback model → escalate if both fail
-**Trace**: Logs raw response, error details, models attempted
-
-### 2. Low Confidence Classification
-**Trigger**: Confidence below intent threshold
-**Handling**: Immediate escalation to human review
-**Trace**: Records confidence gap, classification attempt
-
-### 3. Risk Flag Detection
-**Trigger**: Critical risk flag present (lawsuit, compliance, fraud)
-**Handling**: Force escalation regardless of confidence
-**Trace**: Flags detected, escalation priority set to "high"
-
-### 4. Budget Overrun
-**Trigger**: Cost or latency exceeds limits
-**Handling**: Log warning, escalate request, alert admin
-**Trace**: Actual vs limit, model performance metrics
-
-### 5. Circuit Breaker Trip
-**Trigger**: Repeated failures (3+ in 60 min)
-**Handling**: Disable automation, require manual reset
-**Trace**: Failure timeline, affected requests
-
-### 6. Duplicate Request
-**Trigger**: Same email hash already processed
-**Handling**: Return cached result, skip processing
-**Trace**: Original request ID, cached timestamp
+| Failure | What triggers it | What the system does | Built? |
+|---|---|---|---|
+| Bad LLM output | The model returns invalid JSON or a wrong value | Retry with the fallback model, escalate if both fail | Partly. It escalates, with no retry yet |
+| Low confidence | Confidence is below the intent threshold | Escalate to human review | Yes |
+| Serious risk flag | `lawsuit`, `compliance`, or `fraud` is present | Escalate with high priority | Yes |
+| Over budget | Cost or latency is above the limit | Log a warning and escalate | Rule exists, uses placeholder values |
+| Circuit breaker | 3 or more failures in 60 minutes | Turn off automation until a manual reset | No |
+| Duplicate email | The email hash already exists | Return the saved result and skip processing | Yes |
 
 ---
 
-## Workflow Phases (10 Total)
+## Test plan
 
-### **Phase 0**: Scope Definition ✅
-- Problem statement, requirements, success criteria
+So far 6 cases have been run by hand: normal cases 1, 2, 4, 5, and 6, and failure case 1.
+The technical case used an email with an apostrophe.
 
-### **Phase 1**: System Design ✅
-- Architecture diagrams, data schemas, module breakdown
+**Normal cases (6)**
+1. Clear billing issue. It auto routes to `billing_team_queue`.
+2. Technical issue. It auto routes to `support_tier1_queue`.
+3. Refund with a warning flag. It auto routes, since `refund` is not critical.
+4. Legal email with a compliance flag. It escalates, since `compliance` is critical.
+5. Unclear email. It escalates for low confidence.
+6. Duplicate email. It returns the saved result.
 
-### **Phase 2**: Reasoning Layer ✅
-- LLM prompts, JSON schema, validation logic
+**Failure cases (6)**
+1. Bad LLM output. The fallback model runs, and the email escalates if both fail.
+2. Confidence below the threshold. It escalates with a reason.
+3. Cost over the limit. It escalates and logs a warning.
+4. Latency over the limit. It escalates and switches model.
+5. Circuit breaker trips. Automation turns off.
+6. Critical risk flag. It forces escalation.
 
-### **Phase 3**: Policy Layer ✅
-- Policy rules, decision logic, routing configuration
-
-### **Phase 4**: State Management ✅
-- Database schema, state operations, query patterns
-
-### **Phase 5**: Execution & Integration (IN PROGRESS)
-- n8n workflow implementation, API integrations, trace assembly
-- **Current Status**: 6-node starter workflow working
-- **Next**: Add policy engine, routing logic, full state persistence
-
-### **Phase 6**: Metrics & Observability
-- Real-time dashboards, KPI tracking, alert configuration
-
-### **Phase 7**: Failure Testing
-- Hard-case test suite, failure injection, recovery validation
-
-### **Phase 8**: Deployment
-- Production configuration, environment setup, monitoring
-
-### **Phase 9**: Documentation
-- System README, architecture docs, runbook
-
-### **Phase 10**: Portfolio Artifacts
-- GitHub repo, blog post, resume bullets, demo video
+**Edge cases (4)**
+1. Confidence exactly at the threshold. It auto routes, since the threshold is inclusive.
+2. Several warning flags. It auto routes, since warnings do not escalate.
+3. Empty email body. It is classified as `unknown` and escalates.
+4. Email not in English. The model tries, and confidence is likely low.
 
 ---
 
-## Success Criteria
+## Risks
 
-### Functional Requirements ✅ / ❌
-
-- [x] System ingests unstructured email text
-- [x] Extracts structured intent with confidence scores
-- [x] Classifies into 5 categories with risk flags
-- [ ] Routes based on confidence thresholds
-- [ ] Applies safety policies (cost, latency, risk)
-- [x] Maintains persistent state in database
-- [ ] Exports full reasoning traces
-- [ ] Escalates ambiguous cases to human review
-- [ ] Handles LLM failures gracefully
-- [ ] Supports model fallback chain
-
-### Performance Targets
-
-- **Latency**: < 10s per request (P95)
-- **Cost**: < $0.05 per request
-- **Automation Rate**: > 70% (non-escalated)
-- **Escalation Precision**: > 90% (escalated cases need human review)
-- **Accuracy**: > 85% vs ground truth labels
-- **Uptime**: > 99% with graceful degradation
-
-### Portfolio Signal (High-Level)
-
-**GitHub Repository**: Clean architecture, documented failure modes, trace examples
-**Blog Post**: "Building AI Systems That Know When Not to Act"
-**Resume Bullet**: "Designed failure-aware AI triage system embedding probabilistic language models into deterministic control pipelines with explicit state, evaluation metrics, and human-in-the-loop safeguards"
+| Risk | Effect | Plan |
+|---|---|---|
+| The LLM provider is down or out of credit | The whole pipeline stops | Add a fallback model. This already happened once, with OpenAI in Session 4 |
+| Costs grow with volume | Budget exceeded | Rate limits and budget alerts |
+| Low classification accuracy | Wrong routing | Human review queue and a feedback loop |
+| Database connection fails | State is lost | Retry logic. Note that Supabase pauses an idle free project |
+| Prompt injection in an email | Wrong classifications | Clean the input and add rate limits |
 
 ---
 
-## Implementation Roadmap
+## Deliverables
 
-### Horizon 1 (H1): MVP Prototype — 2 Weeks
-**Goal**: Working end-to-end pipeline with 1 email type
-
-- [x] Week 1: Database + n8n setup + basic workflow (6 nodes)
-- [ ] Week 2: Policy engine + routing + trace logging (full 32 nodes)
-- [ ] Deliverable: Demo video showing auto-route vs escalate decision
-
-### Horizon 2 (H2): Production System — 4 Weeks
-**Goal**: Handle all 5 categories with failure modes demonstrated
-
-- [ ] Week 3: Failure test suite + circuit breaker + duplicate handling
-- [ ] Week 4: Metrics dashboard + alerting + performance optimization
-- [ ] Week 5: Integration with real email system (Gmail/Outlook)
-- [ ] Week 6: Load testing + documentation + deployment guide
-- [ ] Deliverable: GitHub repo + technical README
-
-### Horizon 3 (H3): Portfolio Compound — 2 Weeks
-**Goal**: Ship public artifacts that generate career signal
-
-- [ ] Week 7: Blog post draft + architecture diagrams + trace visualizations
-- [ ] Week 8: LinkedIn post series + resume update + demo refinement
-- [ ] Deliverable: Published blog, updated resume, active GitHub repo
-
----
-
-## Test Cases (Coverage Plan)
-
-### Happy Path Tests (6)
-
-1. **Clear billing issue** → Auto-route to billing_team_queue
-2. **Technical issue** → Auto-route to support_tier1_queue
-3. **Refund with warning flag** → Auto-route (refund is not critical)
-4. **Legal with compliance flag** → Escalate (compliance is critical)
-5. **Ambiguous email** → Escalate (low confidence)
-6. **Duplicate email** → Return cached result
-
-### Failure Mode Tests (6)
-
-1. **Malformed LLM output** → Trigger fallback → Escalate if both fail
-2. **Confidence below threshold** → Escalate with reason
-3. **Cost exceeded** → Escalate + log warning
-4. **Latency exceeded** → Escalate + switch model
-5. **Circuit breaker trip** → Disable automation
-6. **Critical risk flag** → Force escalation
-
-### Edge Cases (4)
-
-1. **Confidence exactly at threshold** → Auto-route (inclusive)
-2. **Multiple warning flags** → Auto-route (warnings don't escalate)
-3. **Empty email body** → Classify as unknown, escalate
-4. **Non-English email** → Model attempts classification, likely low confidence
-
----
-
-## Key Risks & Mitigations
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| OpenAI API downtime | Complete system halt | Add fallback model (GPT-3.5-turbo) |
-| Cost overrun from high volume | Budget exceeded | Rate limiting + budget alerts |
-| Low classification accuracy | Poor routing decisions | Human review queue + feedback loop |
-| Database connection failures | Lost state | Retry logic + connection pooling |
-| Prompt injection attacks | Malicious classifications | Input sanitization + rate limiting |
-
----
-
-## Artifacts & Deliverables
-
-### GitHub Repository Structure
+### Repo layout
 
 ```
-failure-aware-ai-triage/
-├── README.md (architecture + quickstart)
+ai-triage-system/
+├── README.md (architecture and quickstart)
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── FAILURE_MODES.md
 │   └── DEPLOYMENT.md
-├── n8n/
-│   └── workflows/
-│       └── email-triage-main.json
+├── workflows/
+│   └── email-triage-main.json
 ├── database/
 │   ├── schema.sql
 │   └── migrations/
@@ -340,73 +296,32 @@ failure-aware-ai-triage/
 └── docker-compose.yml
 ```
 
-### Blog Post Outline
+### Blog post outline
 
-**Title**: "Building AI Systems That Know When Not to Act"
+**Title:** "Building AI Systems That Know When Not to Act"
 
-1. **The Problem**: Most AI demos assume success; production needs failure awareness
-2. **Core Insight**: Intelligence without control is dangerous
-3. **System Design**: Probabilistic reasoning + deterministic policy
-4. **Failure Modes**: Demonstrated, not hidden
-5. **Lessons Learned**: What worked, what didn't, what surprised us
-6. **Code Walkthrough**: Key architectural decisions with examples
+1. The problem. Most AI demos assume success, and real systems need to plan for failure.
+2. The main idea. A model without fixed rules around it is unsafe to automate.
+3. The design. The model suggests and the rules decide.
+4. The failure modes, shown working.
+5. What worked, what did not, and what was surprising.
+6. A walk through the key design decisions, with examples.
 
-### Resume Bullet (Final)
+### Resume bullet
 
-"Designed and deployed a failure-aware AI triage system embedding probabilistic language models into deterministic control pipelines with explicit state, evaluation metrics, and human-in-the-loop safeguards — demonstrating research-grade reasoning about AI safety and system reliability"
-
----
-
-## What Makes This Research-Aligned
-
-| Research Value | Where It Shows |
-|----------------|----------------|
-| Reasoning ≠ control | Separate LLM and policy layers |
-| Probabilistic + symbolic | Neural classification + hard rules |
-| Inspectability | Full traces, no black boxes |
-| Safety thinking | Guardrails, escalation, circuit breaker |
-| NeSy intuition | State + logic + neural components |
-| Failure awareness | Explicit handling, not edge cases |
-| Evaluation rigor | Metrics, test cases, failure injection |
+"Designed and deployed a failure-aware AI triage system embedding probabilistic language
+models into deterministic control pipelines with explicit state, evaluation metrics, and
+human-in-the-loop safeguards."
 
 ---
 
-## Current Status Summary
+## How this lines up with research interests
 
-**What Works**:
-- ✅ Email ingestion via webhook
-- ✅ Unique ID generation + duplicate detection (hash-based)
-- ✅ Database persistence (requests table)
-- ✅ LLM classification with structured outputs (JSON Schema)
-- ✅ End-to-end flow (webhook → classify → respond)
-
-**What's Missing**:
-- ❌ Policy decision engine (confidence + risk + budget checks)
-- ❌ Routing logic (auto-route vs escalate branching)
-- ❌ Full state persistence (classifications, routing_decisions, traces)
-- ❌ Slack/email integration for escalations
-- ❌ Failure handling (fallback model, circuit breaker)
-- ❌ Duplicate detection flow (query → IF → cached response)
-- ❌ Metrics dashboard + monitoring
-
-**Next Session Goals**:
-1. Add policy decision engine (Code node with confidence/risk/budget checks)
-2. Add IF node to branch auto-route vs escalate
-3. Write classification to database
-4. Write routing decision to database
-5. Test with multiple email types (billing, legal, refund, ambiguous)
-
----
-
-## Questions for Next Session
-
-1. Should we add Slack integration first, or finish database writes?
-2. How do we test escalation flow without a real Slack workspace?
-3. Should we add duplicate detection now, or after policy engine?
-4. Do we need a separate "metrics" workflow, or inline calculations?
-
----
-
-**Last Updated**: 2026-03-19
-**Phase**: H1 — MVP Prototype (Week 1 complete, Week 2 in progress)
-**Status**: 6-node workflow functional, expanding to 32-node full pipeline
+| Research idea | Where it shows in the project |
+|---|---|
+| Reasoning kept apart from control | The LLM layer and the policy layer are separate |
+| Neural plus fixed rules | The model classifies, hard rules act |
+| Inspectability | Full traces, nothing hidden |
+| Safety | Guardrails, escalation, circuit breaker |
+| Failure awareness | Failures are handled on purpose |
+| Evaluation | Metrics, test cases, failure injection |
