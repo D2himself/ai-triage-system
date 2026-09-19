@@ -1,6 +1,6 @@
 [
   {
-    "updatedAt": "2026-09-18T16:23:26.000Z",
+    "updatedAt": "2026-09-19T21:33:21.000Z",
     "createdAt": "2026-03-19T13:36:23.145Z",
     "id": "YvYWLjqlEa4uxEUp",
     "name": "My workflow",
@@ -70,7 +70,7 @@
         "type": "n8n-nodes-base.respondToWebhook",
         "typeVersion": 1.5,
         "position": [
-          2208,
+          2656,
           0
         ],
         "id": "311111bb-b469-48cd-8137-1246683c5f11",
@@ -149,7 +149,7 @@
       },
       {
         "parameters": {
-          "jsCode": "// === POLICY ENGINE ===\n// Reads classification output, applies deterministic rules,\n// output a routing decision.\n\n// 1. Pull data from upstream nodes\nconst rawOutput = $(\"Basic LLM Chain\").item.json;\nconst metadata = $('Generate Request Metadata').item.json;\n\n// 2. Configuration (would normally live in env/config)\nconst CONFIDENCE_THRESHOLDS = {\n  billing_issue: 0.75,\n  technical_issue: 0.70,\n  refund_request: 0.80,\n  legal_escalation: 0.90,\n  unknown: 1.01 // impossible threshold = always escalate\n};\n\nconst CRITICAL_RISK_FLAGS = ['lawsuit', 'compliance', 'fraud'];\nconst VALID_RISK_FLAGS = ['refund', 'chargeback', 'lawsuit', 'compliance', 'fraud', 'outage', 'data_loss'];\n\nconst ROUTING_QUEUES = {\n  billing_issue: 'billing_team_queue',\n  technical_issue: 'support_tier1_queue',\n  refund_request: 'billing_team_queue',\n  legal_escalation: 'legal_team_queue',\n  unknown: 'human_review_queue'\n};\n\nconst COST_LIMIT_USD = 0.10;\nconst LATENCY_LIMIT_MS = 15000;\n\n// 3. Stud cost/latency for now (we'll wire real values in Phase 6)\nconst cost_usd = 0.001;\nconst latency_ms = 2000;\n\n// 4. Initialize tracking\nconst policiesEvaluated = [];\nconst policiesPassed = [];\nconst policiesFailed = [];\n\n// 5.  Policy checks (we'll fill these in)\n\n// CHECK 0: LLM output validation\n// Groq does not enforce the JSON schema the way OpenAI's structured outputs did,\n// so the contract is checked here. Bad output escalates instead of crashing.\npoliciesEvaluated.push('output_validation_check');\n\nconst validationErrors = [];\nlet classification = null;\ntry {\n  classification = JSON.parse(rawOutput?.text ?? '');\n} catch (e) {}\n\nconst c = classification;\nif (c === null || typeof c !== 'object' || Array.isArray(c)) {\n  validationErrors.push('output is not a JSON object');\n} else {\n  if (!Object.hasOwn(CONFIDENCE_THRESHOLDS, c.intent)) validationErrors.push(`unknown intent: ${c.intent}`);\n  if (typeof c.confidence !== 'number' || c.confidence < 0 || c.confidence > 1) validationErrors.push(`confidence is not a number from 0 to 1: ${c.confidence}`);\n  if (typeof c.summary !== 'string' || c.summary.length > 500) validationErrors.push('summary is missing or longer than 500 characters');\n  if (typeof c.reasoning !== 'string') validationErrors.push('reasoning is missing');\n  if (!Array.isArray(c.risk_flags)) {\n    validationErrors.push('risk_flags is not a list');\n  } else {\n    const unknownFlags = c.risk_flags.filter(flag => !VALID_RISK_FLAGS.includes(flag));\n    if (unknownFlags.length > 0) validationErrors.push(`unknown risk flags: ${unknownFlags.join(', ')}`);\n  }\n}\n\nif (validationErrors.length > 0) {\n  policiesFailed.push('output_validation_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'invalid_llm_output',\n      escalation_priority: 'high',\n      validation_errors: validationErrors,\n      raw_output: rawOutput?.text ?? null,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      // Safe placeholder so the database writes still have valid values\n      classification: {\n        intent: 'unknown',\n        confidence: 0,\n        summary: '',\n        risk_flags: [],\n        reasoning: 'LLM output failed validation: ' + validationErrors.join('; ')\n      },\n      validation_success: false,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('output_validation_check');\n}\n\n// CHECK 1: Critical risk flags\n// TODO\npoliciesEvaluated.push('risk_flag_check');\n\nconst found = classification.risk_flags.filter(flag => CRITICAL_RISK_FLAGS.includes(flag));\n\nif (found.length > 0) {\n  policiesFailed.push('risk_flag_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'critical_risk_flag',\n      escalation_priority: 'critical',\n      triggered_flags: found,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      classification: classification,\n    validation_success: true,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('risk_flag_check');\n}\n\n// CHECK 2: Budget\n// TODO\npoliciesEvaluated.push('budget_check');\n\nif (cost_usd > COST_LIMIT_USD || latency_ms > LATENCY_LIMIT_MS) {\n  policiesFailed.push('budget_check');\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'budget_exceeded',\n    escalation_priority: 'high',\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true\n  }\n}];\n} else {\n  policiesPassed.push('budget_check');\n}\n\n// CHECK 3: Confidence\n// TODO\npoliciesEvaluated.push('confidence_check');\n\nconst threshold = CONFIDENCE_THRESHOLDS[classification.intent];\nif (threshold === undefined) {\n  throw new Error(`No threshold defined for intent: ${classification.intent}`);\n}\nif (classification.confidence < threshold) {\n  policiesFailed.push('confidence_check');\n  const escalation_priority = classification.intent === 'legal_escalation' ? 'critical' : 'medium';\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'low_confidence',\n    escalation_priority: escalation_priority,\n    confidence_threshold: threshold,\n    actual_confidence: classification.confidence,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n} else {\n  policiesPassed.push('confidence_check');\n}\n\n// 6. Default: auto-route\nreturn [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'auto_route',\n    destination: ROUTING_QUEUES[classification.intent],\n    escalation_reason: null,\n    escalation_priority: null,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n\n"
+          "jsCode": "// === POLICY ENGINE ===\n// Reads classification output, applies deterministic rules,\n// output a routing decision.\n\n// 1. Pull data from upstream nodes\nconst llm = $('Classify Email').item.json;\nconst rawText = llm?.choices?.[0]?.message?.content ?? null;\nconst promptBuiltAt = $('Build Classification Prompt').item.json.timestamp_prompt_built;\nconst metadata = $('Generate Request Metadata').item.json;\n\n// 2. Configuration (would normally live in env/config)\nconst CONFIDENCE_THRESHOLDS = {\n  billing_issue: 0.75,\n  technical_issue: 0.70,\n  refund_request: 0.80,\n  legal_escalation: 0.90,\n  unknown: 1.01 // impossible threshold = always escalate\n};\n\nconst CRITICAL_RISK_FLAGS = ['lawsuit', 'compliance', 'fraud'];\nconst VALID_RISK_FLAGS = ['refund', 'chargeback', 'lawsuit', 'compliance', 'fraud', 'outage', 'data_loss'];\n\nconst ROUTING_QUEUES = {\n  billing_issue: 'billing_team_queue',\n  technical_issue: 'support_tier1_queue',\n  refund_request: 'billing_team_queue',\n  legal_escalation: 'legal_team_queue',\n  unknown: 'human_review_queue'\n};\n\nconst COST_LIMIT_USD = 0.10;\nconst LATENCY_LIMIT_MS = 15000;\n\n// Groq price for openai/gpt-oss-20b, USD per million tokens (console.groq.com, 2026-09-19)\nconst PRICE_INPUT_PER_M = 0.075;\nconst PRICE_OUTPUT_PER_M = 0.30;\n\n// 3. Real cost and latency of the LLM call\n// Latency: from the prompt being built to the reply arriving here.\nconst latency_ms = Date.now() - Date.parse(promptBuiltAt);\nconst prompt_tokens = llm?.usage?.prompt_tokens ?? 0;\nconst completion_tokens = llm?.usage?.completion_tokens ?? 0;\nconst cost_usd = Math.round((prompt_tokens * PRICE_INPUT_PER_M + completion_tokens * PRICE_OUTPUT_PER_M)) / 1e6;\n\n// 4. Initialize tracking\nconst policiesEvaluated = [];\nconst policiesPassed = [];\nconst policiesFailed = [];\n\n// 5.  Policy checks (we'll fill these in)\n\n// CHECK 0: LLM output validation\n// Groq's strict schema mode should already enforce this shape. This check is the\n// second guard: bad output escalates instead of crashing.\npoliciesEvaluated.push('output_validation_check');\n\nconst validationErrors = [];\nlet classification = null;\ntry {\n  classification = JSON.parse(rawText ?? '');\n} catch (e) {}\n\nconst c = classification;\nif (c === null || typeof c !== 'object' || Array.isArray(c)) {\n  validationErrors.push('output is not a JSON object');\n} else {\n  if (!Object.hasOwn(CONFIDENCE_THRESHOLDS, c.intent)) validationErrors.push(`unknown intent: ${c.intent}`);\n  if (typeof c.confidence !== 'number' || c.confidence < 0 || c.confidence > 1) validationErrors.push(`confidence is not a number from 0 to 1: ${c.confidence}`);\n  if (typeof c.summary !== 'string' || c.summary.length > 500) validationErrors.push('summary is missing or longer than 500 characters');\n  if (typeof c.reasoning !== 'string') validationErrors.push('reasoning is missing');\n  if (!Array.isArray(c.risk_flags)) {\n    validationErrors.push('risk_flags is not a list');\n  } else {\n    const unknownFlags = c.risk_flags.filter(flag => !VALID_RISK_FLAGS.includes(flag));\n    if (unknownFlags.length > 0) validationErrors.push(`unknown risk flags: ${unknownFlags.join(', ')}`);\n  }\n}\n\nif (validationErrors.length > 0) {\n  policiesFailed.push('output_validation_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'invalid_llm_output',\n      escalation_priority: 'high',\n      validation_errors: validationErrors,\n      raw_output: rawText,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      // Safe placeholder so the database writes still have valid values\n      classification: {\n        intent: 'unknown',\n        confidence: 0,\n        summary: '',\n        risk_flags: [],\n        reasoning: 'LLM output failed validation: ' + validationErrors.join('; ')\n      },\n      validation_success: false,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('output_validation_check');\n}\n\n// CHECK 1: Critical risk flags\n// TODO\npoliciesEvaluated.push('risk_flag_check');\n\nconst found = classification.risk_flags.filter(flag => CRITICAL_RISK_FLAGS.includes(flag));\n\nif (found.length > 0) {\n  policiesFailed.push('risk_flag_check');\n  return [{\n    json: {\n      request_id: metadata.request_id,\n      decision: 'escalate',\n      destination: 'human_review_queue',\n      escalation_reason: 'critical_risk_flag',\n      escalation_priority: 'critical',\n      triggered_flags: found,\n      policies_evaluated: policiesEvaluated,\n      policies_passed: policiesPassed,\n      policies_failed: policiesFailed,\n      classification: classification,\n    validation_success: true,\n      cost_usd: cost_usd,\n      latency_ms: latency_ms,\n    }\n  }];\n} else {\n  policiesPassed.push('risk_flag_check');\n}\n\n// CHECK 2: Budget\n// TODO\npoliciesEvaluated.push('budget_check');\n\nif (cost_usd > COST_LIMIT_USD || latency_ms > LATENCY_LIMIT_MS) {\n  policiesFailed.push('budget_check');\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'budget_exceeded',\n    escalation_priority: 'high',\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true\n  }\n}];\n} else {\n  policiesPassed.push('budget_check');\n}\n\n// CHECK 3: Confidence\n// TODO\npoliciesEvaluated.push('confidence_check');\n\nconst threshold = CONFIDENCE_THRESHOLDS[classification.intent];\nif (threshold === undefined) {\n  throw new Error(`No threshold defined for intent: ${classification.intent}`);\n}\nif (classification.confidence < threshold) {\n  policiesFailed.push('confidence_check');\n  const escalation_priority = classification.intent === 'legal_escalation' ? 'critical' : 'medium';\n  return [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'escalate',\n    destination: 'human_review_queue',\n    escalation_reason: 'low_confidence',\n    escalation_priority: escalation_priority,\n    confidence_threshold: threshold,\n    actual_confidence: classification.confidence,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n} else {\n  policiesPassed.push('confidence_check');\n}\n\n// 6. Default: auto-route\nreturn [{\n  json: {\n    request_id: metadata.request_id,\n    decision: 'auto_route',\n    destination: ROUTING_QUEUES[classification.intent],\n    escalation_reason: null,\n    escalation_priority: null,\n    policies_evaluated: policiesEvaluated,\n    policies_passed: policiesPassed,\n    policies_failed: policiesFailed,\n    classification: classification,\n    validation_success: true,\n    cost_usd: cost_usd,\n    latency_ms: latency_ms,\n  }\n}];\n\n"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -163,9 +163,9 @@
       {
         "parameters": {
           "operation": "executeQuery",
-          "query": "INSERT INTO classifications (\n  request_id, intent, confidence, summary, risk_flags, reasoning,\n  model_used, fallback_triggered, latency_ms, cost_usd, validation_success,\n  validation_errors, raw_response\n) VALUES (\n  $1, $2, $3, $4, to_jsonb($5::text[]), $6, $7, $8, $9, $10, $11,\n  to_jsonb($12::text[]), $13\n)",
+          "query": "INSERT INTO classifications (\n  request_id, intent, confidence, summary, risk_flags, reasoning,\n  model_used, fallback_triggered, latency_ms, cost_usd, validation_success,\n  validation_errors, raw_response, prompt_tokens, completion_tokens, total_tokens\n) VALUES (\n  $1, $2, $3, $4, to_jsonb($5::text[]), $6, $7, $8, $9, $10, $11,\n  to_jsonb($12::text[]), $13, $14, $15, $16\n)",
           "options": {
-            "queryReplacement": "={{ [   $('Policy Engine').item.json.request_id,   $('Policy Engine').item.json.classification.intent,   $('Policy Engine').item.json.classification.confidence,   $('Policy Engine').item.json.classification.summary,   $('Policy Engine').item.json.classification.risk_flags,   $('Policy Engine').item.json.classification.reasoning,   'openai/gpt-oss-20b',   false,   $('Policy Engine').item.json.latency_ms,   $('Policy Engine').item.json.cost_usd,   $('Policy Engine').item.json.validation_success,   $('Policy Engine').item.json.validation_errors ?? [],   $('Basic LLM Chain').item.json.text ?? null ] }}"
+            "queryReplacement": "={{ [   $('Policy Engine').item.json.request_id,   $('Policy Engine').item.json.classification.intent,   $('Policy Engine').item.json.classification.confidence,   $('Policy Engine').item.json.classification.summary,   $('Policy Engine').item.json.classification.risk_flags,   $('Policy Engine').item.json.classification.reasoning,   $('Classify Email').item.json.model,   false,   $('Policy Engine').item.json.latency_ms,   $('Policy Engine').item.json.cost_usd,   $('Policy Engine').item.json.validation_success,   $('Policy Engine').item.json.validation_errors ?? [],   $('Classify Email').item.json.choices?.[0]?.message?.content ?? null,   $('Classify Email').item.json.usage?.prompt_tokens ?? null,   $('Classify Email').item.json.usage?.completion_tokens ?? null,   $('Classify Email').item.json.usage?.total_tokens ?? null ] }}"
           }
         },
         "type": "n8n-nodes-base.postgres",
@@ -207,41 +207,6 @@
         }
       },
       {
-        "parameters": {
-          "promptType": "define",
-          "text": "={{ $json.classification_prompt }}",
-          "batching": {}
-        },
-        "type": "@n8n/n8n-nodes-langchain.chainLlm",
-        "typeVersion": 1.9,
-        "position": [
-          1296,
-          0
-        ],
-        "id": "fe7b3b89-37ad-4682-b7c8-c6fb4f3aac1b",
-        "name": "Basic LLM Chain"
-      },
-      {
-        "parameters": {
-          "model": "openai/gpt-oss-20b",
-          "options": {}
-        },
-        "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
-        "typeVersion": 1,
-        "position": [
-          1264,
-          192
-        ],
-        "id": "c8efb78b-07f0-4fc8-9f0c-bb8fb02443f6",
-        "name": "Groq Chat Model",
-        "credentials": {
-          "groqApi": {
-            "id": "8yNtqF6XRYKBbpru",
-            "name": "Groq account"
-          }
-        }
-      },
-      {
         "id": "1e53b548-6a69-4a12-82a8-b7f755fb7a93",
         "name": "Respond Duplicate",
         "type": "n8n-nodes-base.respondToWebhook",
@@ -254,6 +219,68 @@
           "respondWith": "json",
           "responseBody": "={{ JSON.stringify({ status: 'duplicate', request_id: $json.existing_request_id, decision: $json.decision, destination: $json.destination, escalation_reason: $json.escalation_reason, message: 'This email was already processed. Returning the saved result.' }) }}",
           "options": {}
+        }
+      },
+      {
+        "id": "8607bdc1-d174-40fb-976a-479680e59977",
+        "name": "Classify Email",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1296,
+          0
+        ],
+        "credentials": {
+          "groqApi": {
+            "id": "8yNtqF6XRYKBbpru",
+            "name": "Groq account"
+          }
+        },
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.groq.com/openai/v1/chat/completions",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "groqApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({\n  model: 'openai/gpt-oss-20b',\n  temperature: 0.7,\n  messages: [{ role: 'user', content: $json.classification_prompt }],\n  response_format: {\n    type: 'json_schema',\n    json_schema: {\n      name: 'email_classification',\n      strict: true,\n      schema: {\n        type: 'object',\n        properties: {\n          intent: { type: 'string', enum: ['billing_issue', 'technical_issue', 'refund_request', 'legal_escalation', 'unknown'] },\n          confidence: { type: 'number' },\n          summary: { type: 'string' },\n          risk_flags: { type: 'array', items: { type: 'string', enum: ['refund', 'chargeback', 'lawsuit', 'compliance', 'fraud', 'outage', 'data_loss'] } },\n          reasoning: { type: 'string' }\n        },\n        required: ['intent', 'confidence', 'summary', 'risk_flags', 'reasoning'],\n        additionalProperties: false\n      }\n    }\n  }\n}) }}",
+          "options": {}
+        }
+      },
+      {
+        "id": "530b15d6-2412-48d3-b24e-d19e6e305d56",
+        "name": "Build Trace",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2208,
+          0
+        ],
+        "parameters": {
+          "jsCode": "// === BUILD TRACE ===\n// Puts together the route card for this request: each step, in order, with\n// what happened there. Only steps with a recorded clock time get a time.\n\nconst meta = $('Generate Request Metadata').item.json;\nconst prompt = $('Build Classification Prompt').item.json;\nconst dup = $('Check Duplicate').item.json;\nconst llm = $('Classify Email').item.json;\nconst policy = $('Policy Engine').item.json;\nconst finishedAt = new Date();\n\nconst steps = [\n  { step: 1, name: 'receive', started_at: meta.timestamp_started,\n    detail: { email_hash: meta.email_hash } },\n  { step: 2, name: 'duplicate_check',\n    detail: { is_duplicate: dup.is_duplicate } },\n  { step: 3, name: 'store_request',\n    detail: { status: 'processing' } },\n  { step: 4, name: 'classify', started_at: prompt.timestamp_prompt_built, duration_ms: policy.latency_ms,\n    detail: {\n      model: llm.model,\n      prompt_tokens: llm.usage?.prompt_tokens ?? null,\n      completion_tokens: llm.usage?.completion_tokens ?? null,\n      cost_usd: policy.cost_usd,\n      validation_success: policy.validation_success,\n    } },\n  { step: 5, name: 'policy',\n    detail: {\n      decision: policy.decision,\n      destination: policy.destination,\n      escalation_reason: policy.escalation_reason,\n      escalation_priority: policy.escalation_priority,\n      policies_passed: policy.policies_passed,\n      policies_failed: policy.policies_failed,\n    } },\n  { step: 6, name: 'store_results', finished_at: finishedAt.toISOString() },\n];\n\n// success = the run finished and a decision was saved.\n// error_* = a step had a problem the run handled, e.g. a slip that failed check 0.\nconst validationFailed = policy.validation_success === false;\n\nreturn [{\n  json: {\n    trace_id: `trace_${meta.request_id}`,\n    request_id: meta.request_id,\n    success: true,\n    total_latency_ms: finishedAt.getTime() - Date.parse(meta.timestamp_started),\n    total_cost_usd: policy.cost_usd,\n    steps: steps,\n    error_occured: validationFailed,\n    error_step: validationFailed ? 4 : null,\n    error_message: validationFailed ? 'LLM output failed validation' : null,\n    error_details: validationFailed ? { validation_errors: policy.validation_errors } : null,\n  }\n}];\n"
+        }
+      },
+      {
+        "id": "dca22b78-f089-4a57-b97f-484f3a8eab7a",
+        "name": "Write Trace",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          2432,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "T6CoVMN2YCTaZ0eJ",
+            "name": "Postgres account"
+          }
+        },
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "INSERT INTO traces (\n  trace_id, request_id, success, total_latency_ms, total_cost_usd, steps,\n  error_occured, error_step, error_message, error_details\n) VALUES (\n  $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb\n)",
+          "options": {
+            "queryReplacement": "={{ [   $json.trace_id,   $json.request_id,   $json.success,   $json.total_latency_ms,   $json.total_cost_usd,   JSON.stringify($json.steps),   $json.error_occured,   $json.error_step,   $json.error_message,   $json.error_details === null ? null : JSON.stringify($json.error_details) ] }}"
+          }
         }
       }
     ],
@@ -324,7 +351,7 @@
         "main": [
           [
             {
-              "node": "Basic LLM Chain",
+              "node": "Classify Email",
               "type": "main",
               "index": 0
             }
@@ -357,29 +384,40 @@
         "main": [
           [
             {
-              "node": "Respond to Webhook",
+              "node": "Build Trace",
               "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "Groq Chat Model": {
-        "ai_languageModel": [
+      "Classify Email": {
+        "main": [
           [
             {
-              "node": "Basic LLM Chain",
-              "type": "ai_languageModel",
+              "node": "Policy Engine",
+              "type": "main",
               "index": 0
             }
           ]
         ]
       },
-      "Basic LLM Chain": {
+      "Build Trace": {
         "main": [
           [
             {
-              "node": "Policy Engine",
+              "node": "Write Trace",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Trace": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
               "type": "main",
               "index": 0
             }
@@ -396,9 +434,9 @@
       "templateCredsSetupCompleted": true
     },
     "pinData": {},
-    "versionId": "e9937b36-0d43-4538-bea1-bd01a0843ba3",
-    "activeVersionId": "e9937b36-0d43-4538-bea1-bd01a0843ba3",
-    "versionCounter": 757,
+    "versionId": "7a5ce5de-863d-415c-a680-13d328eb6e22",
+    "activeVersionId": "7a5ce5de-863d-415c-a680-13d328eb6e22",
+    "versionCounter": 772,
     "triggerCount": 1,
     "tags": []
   }
