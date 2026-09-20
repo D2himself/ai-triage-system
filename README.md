@@ -41,18 +41,25 @@ Email Input
     │
     ▼
 ┌─────────────────┐
-│  LLM Classify   │ ← OpenAI GPT-4o-mini, JSON Schema structured output
-└─────────────────┘
+│  LLM Classify   │ ← Groq gpt-oss-20b, strict JSON schema, temperature 0
+└─────────────────┘         └── on failure → gpt-oss-120b (fallback model)
     │
     ▼
 ┌─────────────────┐
-│  Policy Engine  │ ← deterministic: confidence, risk flags, budget
+│  Policy Engine  │ ← deterministic: output check, risk flags, budget, confidence
 └─────────────────┘
     │
     ├──► auto-route ──► routing queue
     │
-    └──► escalate  ──► human review queue
+    └──► escalate  ──► human review queue ──► Slack alert
+    │
+    ▼
+┌─────────────────┐
+│  Persist + Trace│ ← classification, routing decision, full run trace
+└─────────────────┘
 ```
+
+A repeated email is detected by its hash before the model is called, and the saved decision is returned instead.
 
 ---
 
@@ -62,8 +69,10 @@ Email Input
 |-------|------|
 | Orchestration | n8n (self-hosted via Docker) |
 | State | Supabase (managed Postgres) |
-| LLM | OpenAI GPT-4o-mini (structured outputs) |
+| LLM | Groq `openai/gpt-oss-20b`, strict JSON schema, temperature 0 |
+| Fallback LLM | Groq `openai/gpt-oss-120b`, used only when the first call fails |
 | Policy layer | JavaScript (n8n Code node) |
+| Alerts | Slack incoming webhook |
 
 ---
 
@@ -83,10 +92,11 @@ The LLM returns structured JSON conforming to:
 
 ## Policy Rules
 
-The policy engine applies three deterministic checks, in order:
+The policy engine applies four deterministic checks, in order. The first failure escalates the email and the rest are skipped.
 
+0. **Output check** — the answer must be JSON with a known intent, a confidence from 0 to 1, and known risk flags. A wrong answer escalates as `invalid_llm_output`, and no answer at all escalates as `llm_unavailable`. The raw answer is saved either way.
 1. **Critical risk flags** — `lawsuit`, `compliance`, `fraud` → force escalate (overrides any confidence)
-2. **Budget enforcement** — cost > $0.10 or latency > 15s → escalate
+2. **Budget enforcement** — cost > $0.10 or latency > 15s → escalate. Both are measured from the real call, and cost comes from the token counts
 3. **Confidence thresholds** — per-intent minimums; below threshold → escalate
    - billing: 0.75 · technical: 0.70 · refund: 0.80 · legal: 0.90 · unknown: always escalate
 
@@ -95,6 +105,10 @@ The policy engine applies three deterministic checks, in order:
 ## Status
 
 🚧 **In active development** — Phase 5 of 10 (Execution & Integration)
+
+Working end to end today: email intake, duplicate detection, classification with a fallback model, the four policy checks, persistence of the request, classification, routing decision and a full trace, and a Slack alert for every escalation.
+
+Not built yet: pushing routed emails to a real queue, metrics and monitoring, a circuit breaker, and handling Groq's rate limit of 8000 tokens a minute.
 
 The build notes are kept privately for now, and will be published when the system is finished.
 
@@ -106,18 +120,22 @@ The build notes are kept privately for now, and will be published when the syste
 
 ```bash
 # 1. Clone
-git clone https://github.com/<your-username>/ai-triage-system.git
+git clone https://github.com/D2himself/ai-triage-system.git
 cd ai-triage-system
 
 # 2. Configure
 cp .env.example .env
-# Edit .env with your Supabase + OpenAI credentials
+# Edit .env with your Supabase credentials, and SLACK_WEBHOOK_URL if you want alerts.
+# The Groq credential is set inside n8n, not in .env.
 
 # 3. Start n8n
 docker compose up -d
 
 # 4. Open n8n UI
 open http://localhost:5678
+
+# 5. Load the schema into your Supabase project, then import the workflow
+#    from workflows/email-triage-main.json in the n8n UI.
 ```
 
 ---
