@@ -15,6 +15,11 @@ services:
       - WEBHOOK_URL=http://localhost:5678/
       - GENERIC_TIMEZONE=Africa/Lagos
       - N8N_EDITOR_BASE_URL=http://localhost:5678
+      # Read from .env, which is not committed. Used by the Slack alert node.
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      # n8n blocks $env in expressions by default. The Slack alert node needs it to read
+      # SLACK_WEBHOOK_URL, which keeps the secret out of the workflow file.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/home/node/.n8n/workflows

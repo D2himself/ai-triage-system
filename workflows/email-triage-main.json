@@ -1,6 +1,6 @@
 [
   {
-    "updatedAt": "2026-09-20T19:54:15.000Z",
+    "updatedAt": "2026-09-20T20:47:29.000Z",
     "createdAt": "2026-03-19T13:36:23.145Z",
     "id": "YvYWLjqlEa4uxEUp",
     "name": "My workflow",
@@ -314,6 +314,73 @@
           }
         },
         "onError": "continueErrorOutput"
+      },
+      {
+        "id": "47a26d74-8dc9-4a87-a2ce-f1165eb1a8b0",
+        "name": "Escalated?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          2432,
+          220
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "2e5dcc21-120e-4e28-a4d0-ffa99393c39e",
+                "leftValue": "={{ $('Policy Engine').item.json.decision }}",
+                "rightValue": "escalate",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "bcfe885b-4c6f-4c30-87df-c85a5239479c",
+        "name": "Build Slack Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2656,
+          220
+        ],
+        "parameters": {
+          "jsCode": "// === BUILD SLACK ALERT ===\n// Runs only for escalated emails. Builds the message a reviewer sees in Slack.\n\nconst meta = $('Generate Request Metadata').item.json;\nconst policy = $('Policy Engine').item.json;\nconst c = policy.classification ?? {};\n\nconst REASON_TEXT = {\n  critical_risk_flag: 'A serious risk flag was found',\n  low_confidence: 'The model was not confident enough',\n  budget_exceeded: 'The call cost too much or took too long',\n  invalid_llm_output: 'The model answered in the wrong format',\n  llm_unavailable: 'No model answered',\n};\n\nconst flags = (c.risk_flags ?? []).length ? c.risk_flags.join(', ') : 'none';\nconst reason = policy.escalation_reason;\nconst summary = policy.validation_success === false\n  ? `The model's answer could not be used: ${(policy.validation_errors ?? []).join('; ')}`\n  : (c.summary || 'no summary');\n\nconst payload = {\n  text: `Escalated: ${c.intent} (${policy.escalation_priority})`,\n  blocks: [\n    { type: 'header', text: { type: 'plain_text', text: `Escalated email: ${policy.escalation_priority} priority` } },\n    { type: 'section', fields: [\n      { type: 'mrkdwn', text: `*Why:*\\n${REASON_TEXT[reason] ?? reason}` },\n      { type: 'mrkdwn', text: `*Category:*\\n${c.intent} (confidence ${c.confidence})` },\n      { type: 'mrkdwn', text: `*Risk flags:*\\n${flags}` },\n      { type: 'mrkdwn', text: `*From:*\\n${meta.from}` },\n    ] },\n    { type: 'section', text: { type: 'mrkdwn', text: `*Subject:* ${meta.subject}\\n*Summary:* ${summary}` } },\n    { type: 'context', elements: [ { type: 'mrkdwn',\n      text: `${meta.request_id} \u00b7 queue ${policy.destination} \u00b7 model ${policy.model_used} \u00b7 $${policy.cost_usd} \u00b7 ${policy.latency_ms} ms` } ] },\n  ],\n};\n\nreturn [{ json: { payload: payload } }];\n"
+        }
+      },
+      {
+        "id": "7b6956cf-8026-4865-8692-6f6094e58d9a",
+        "name": "Alert Slack",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2880,
+          220
+        ],
+        "onError": "continueRegularOutput",
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.payload) }}",
+          "options": {
+            "timeout": 10000
+          }
+        }
       }
     ],
     "connections": {
@@ -459,6 +526,11 @@
               "node": "Respond to Webhook",
               "type": "main",
               "index": 0
+            },
+            {
+              "node": "Escalated?",
+              "type": "main",
+              "index": 0
             }
           ]
         ]
@@ -480,6 +552,29 @@
             }
           ]
         ]
+      },
+      "Escalated?": {
+        "main": [
+          [
+            {
+              "node": "Build Slack Alert",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Build Slack Alert": {
+        "main": [
+          [
+            {
+              "node": "Alert Slack",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "settings": {
@@ -491,9 +586,9 @@
       "templateCredsSetupCompleted": true
     },
     "pinData": {},
-    "versionId": "c893ca92-34e5-41c9-b19f-c7c489765555",
-    "activeVersionId": "c893ca92-34e5-41c9-b19f-c7c489765555",
-    "versionCounter": 781,
+    "versionId": "93091c9c-38d2-4fc0-841e-2ccb01098f95",
+    "activeVersionId": "93091c9c-38d2-4fc0-841e-2ccb01098f95",
+    "versionCounter": 785,
     "triggerCount": 1,
     "tags": []
   }
