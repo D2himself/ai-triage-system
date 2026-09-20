@@ -41,3 +41,9 @@ logs/
 *.sqlite
 data/local/
 scratch/
+
+# Private build notes, not published yet
+CLAUDE.md
+plan.md
+session-log.md
+AGENTS.md

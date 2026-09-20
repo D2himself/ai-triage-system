@@ -96,13 +96,13 @@ The policy engine applies three deterministic checks, in order:
 
 🚧 **In active development** — Phase 5 of 10 (Execution & Integration)
 
-See [`plan.md`](./plan.md) for the full project plan and [`session-log.md`](./session-log.md) for build progress.
+The build notes are kept privately for now, and will be published when the system is finished.
 
 ---
 
 ## Local Setup
 
-> Requires Docker, a Supabase project, and an OpenAI API key.
+> Requires Docker, a Supabase project, and a Groq API key.
 
 ```bash
 # 1. Clone

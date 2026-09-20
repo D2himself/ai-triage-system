@@ -1,6 +1,6 @@
 [
   {
-    "updatedAt": "2026-09-19T21:33:21.000Z",
+    "updatedAt": "2026-09-20T19:26:40.000Z",
     "createdAt": "2026-03-19T13:36:23.145Z",
     "id": "YvYWLjqlEa4uxEUp",
     "name": "My workflow",
@@ -186,7 +186,7 @@
       {
         "parameters": {
           "operation": "executeQuery",
-          "query": "INSERT INTO routing_decisions (\n  request_id, decision, destination, escalation_reason, escalation_priority,\n  policies_evaluated, policies_passed, policies_failed\n) VALUES (\n  $1, $2, $3, $4, $5, to_jsonb($6::text[]), to_jsonb($7::text[]), to_jsonb($8::text[])\n)",
+          "query": "WITH d AS (\n  INSERT INTO routing_decisions (\n    request_id, decision, destination, escalation_reason, escalation_priority,\n    policies_evaluated, policies_passed, policies_failed\n  ) VALUES (\n    $1, $2, $3, $4, $5, to_jsonb($6::text[]), to_jsonb($7::text[]), to_jsonb($8::text[])\n  )\n  RETURNING request_id, decision\n)\nUPDATE requests\nSET status = CASE WHEN d.decision = 'auto_route' THEN 'auto_routed' ELSE 'escalated' END,\n    processed_at = NOW()\nFROM d\nWHERE requests.request_id = d.request_id\nRETURNING requests.request_id, requests.status",
           "options": {
             "queryReplacement": "={{ [   $('Policy Engine').item.json.request_id,   $('Policy Engine').item.json.decision,   $('Policy Engine').item.json.destination,   $('Policy Engine').item.json.escalation_reason,   $('Policy Engine').item.json.escalation_priority,   $('Policy Engine').item.json.policies_evaluated,\n$('Policy Engine').item.json.policies_passed,\n$('Policy Engine').item.json.policies_failed ] }}"
           }
@@ -434,9 +434,9 @@
       "templateCredsSetupCompleted": true
     },
     "pinData": {},
-    "versionId": "7a5ce5de-863d-415c-a680-13d328eb6e22",
-    "activeVersionId": "7a5ce5de-863d-415c-a680-13d328eb6e22",
-    "versionCounter": 772,
+    "versionId": "4938d099-0700-45e0-97c8-52a0b01f3f43",
+    "activeVersionId": "4938d099-0700-45e0-97c8-52a0b01f3f43",
+    "versionCounter": 777,
     "triggerCount": 1,
     "tags": []
   }
